@@ -16,17 +16,16 @@ from ..schema.loader import SchemaContext, SchemaLoader
 
 # System prompt for the NL2SQL generation task.
 _SYSTEM_PROMPT = """\
-You are an expert SQL developer. Generate a PostgreSQL query that answers the \
-user's natural language question.
+You are an expert PostgreSQL developer. Generate a SQL query that answers the \
+user's question using ONLY the exact table and column names from the schema context below.
 
-Rules:
-- Use ONLY the tables and columns provided in the schema context.
-- Prefer JOINs over subqueries when possible.
+CRITICAL RULES:
+- You MUST use the EXACT table names and column names provided. Do NOT rename or guess.
+- For example, if the schema says "customer" with column "c_custkey", use those EXACT names.
+- Prefer JOINs over subqueries.
 - Use appropriate indexes — add WHERE predicates on indexed columns when relevant.
-- Consider table sizes when choosing join strategies.
 - Return ONLY the SQL query, wrapped in ```sql ... ``` markers.
-- Do NOT include any explanation outside the SQL block.
-- Ensure the query is correct and efficient.
+- Do NOT include any explanation.
 """
 
 _REFINEMENT_PROMPT_SUFFIX = """\

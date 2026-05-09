@@ -11,7 +11,7 @@ based on plan acceptability and iteration limits.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TypedDict
+from typing import List, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 
@@ -35,11 +35,11 @@ class PipelineState(TypedDict):
     question: str
     db_name: str
     sql: str
-    plan_report: PlanReport | None
-    feedback: str | None
+    plan_report: Optional[PlanReport]
+    feedback: Optional[str]
     iteration: int
-    history: list[PlanReport]
-    schema_context: SchemaContext | None
+    history: List[PlanReport]
+    schema_context: Optional[SchemaContext]
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +227,9 @@ class Pipeline:
         Uses the PlanAnalyzer which handles parsing internally. Constructs
         the analyzer with table sizes and index info from the schema context
         so the pattern detectors have full metadata available.
+
+        If EXPLAIN fails (e.g., invalid table/column name), creates a synthetic
+        error report so the pipeline can feed the error back to the LLM.
         """
         sql = state["sql"]
         db_name = state["db_name"]
@@ -237,7 +240,6 @@ class Pipeline:
             schema_context = self._schema_loader.load(db_name)
 
         # Build table_sizes and available_indexes from schema context
-        # for the PlanAnalyzer
         table_sizes: dict[str, int] = {}
         available_indexes: dict[str, list[dict]] = {}
         for table in schema_context.tables:
@@ -247,16 +249,39 @@ class Pipeline:
                 for idx in table.indexes
             ]
 
-        # Create analyzer with current schema metadata
-        analyzer = PlanAnalyzer(
-            table_sizes=table_sizes,
-            available_indexes=available_indexes,
-            cost_threshold=self._cost_threshold,
-        )
+        try:
+            # Get the query plan from PostgreSQL and analyze it
+            explain_json = self._db.explain(sql)
 
-        # Get the query plan from PostgreSQL and analyze it
-        explain_json = self._db.explain(sql)
-        report = analyzer.analyze(explain_json)
+            analyzer = PlanAnalyzer(
+                table_sizes=table_sizes,
+                available_indexes=available_indexes,
+                cost_threshold=self._cost_threshold,
+            )
+            report = analyzer.analyze(explain_json)
+        except Exception as e:
+            # SQL failed to execute — create an error report that the
+            # feedback formatter can turn into actionable LLM hints
+            from .analyzer.patterns import AntiPattern, Severity
+            from .analyzer.explain import PlanNode
+
+            error_pattern = AntiPattern(
+                pattern_name="sql_error",
+                severity=Severity.HIGH,
+                node=PlanNode(node_type="Error"),
+                description=f"SQL failed with error: {e}",
+                suggestion=(
+                    f"Fix the SQL error. Available tables: "
+                    f"{', '.join(schema_context.table_names)}. "
+                    f"Use exact table names from the schema."
+                ),
+            )
+            report = PlanReport(
+                total_cost=float("inf"),
+                anti_patterns=[error_pattern],
+                is_acceptable=False,
+                severity_summary={"high": 1},
+            )
 
         # Append to history
         history = list(state["history"])

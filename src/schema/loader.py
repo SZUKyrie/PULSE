@@ -205,9 +205,21 @@ class SchemaLoader:
             ForeignKey(
                 constraint_name=row["constraint_name"],
                 source_table=row["source_table"],
-                source_columns=row["source_columns"],
+                source_columns=_ensure_list(row["source_columns"]),
                 target_table=row["target_table"],
-                target_columns=row["target_columns"],
+                target_columns=_ensure_list(row["target_columns"]),
             )
             for row in rows
         ]
+
+
+def _ensure_list(val) -> list[str]:
+    """Convert PostgreSQL array_agg output to a Python list.
+
+    psycopg2 may return a list or a string like '{a,b}' depending on cursor type.
+    """
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        return [v.strip() for v in val.strip("{}").split(",") if v.strip()]
+    return []
